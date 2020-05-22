@@ -32,6 +32,10 @@ class RnaInteractionSearchParameters{
   int _drop_out_length_wo_gap;
   int _drop_out_length_w_gap;
   int _min_helix_length;
+
+  int _num_queries;
+  int _debug;
+  string _tmp_path;
  public:
   RnaInteractionSearchParameters(){
     _db_filename = "";
@@ -48,6 +52,10 @@ class RnaInteractionSearchParameters{
     _drop_out_length_wo_gap = 5;
     _drop_out_length_w_gap = 16;
     _min_helix_length = 3;
+
+    _num_queries = 0;
+    _debug = 0;
+    _tmp_path = "";
   }
   void SetParameters(int argc, char* argv[]);
   void SetDbParameters();
@@ -126,6 +134,18 @@ class RnaInteractionSearchParameters{
 
   void SetMinAccessibleLength(int a) {
     _min_accessible_length = a;
+  }
+
+  int GetNumQueries() const {
+    return _num_queries;
+  }
+
+  int GetDebug() const {
+    return _debug;
+  }
+
+  string GetPath() const {
+    return _tmp_path;
   }
 };
 

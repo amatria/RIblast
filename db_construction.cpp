@@ -11,30 +11,44 @@
 #include "sais.h"
 #include "raccess.h"
 #include <math.h>
-#include <time.h> 
-          
+#include <time.h>
+
 void DbConstruction::Run(const DbConstructionParameters parameters){
-  vector<string> sequences; sequences.reserve(10);
-  vector<unsigned char> encoded_sequences;
-  vector<int> suffix_array;
-  vector<vector <int> > start_hash; start_hash.reserve(parameters.GetHashSize());
-  vector<vector <int> > end_hash; start_hash.reserve(parameters.GetHashSize());
+  vector<vector<string>> vec_sequences;
 
-  ReadFastaFile(parameters, sequences);
-  CalculateAccessibility(parameters,sequences);
-  ConstructSuffixArray(parameters, sequences,encoded_sequences,suffix_array);
-  ConstructHashForShortSubstring(parameters, encoded_sequences, suffix_array, start_hash, end_hash);
+  ReadFastaFile(parameters, vec_sequences);
+  for (int i = 0; i < vec_sequences.size(); i++) {
+    vector<string> sequences = vec_sequences[i];
+    vector<unsigned char> encoded_sequences;
+    vector<int> suffix_array;
+    vector<vector<int>> start_hash;
+    vector<vector<int>> end_hash;
 
-  SaveIndexData(parameters.GetDbFilename(), suffix_array, start_hash, end_hash);
-  SaveSequenceData(parameters.GetDbFilename(), sequences, encoded_sequences);
-  
+    CalculateAccessibility(parameters, sequences);
+    ConstructSuffixArray(parameters, sequences, encoded_sequences, suffix_array);
+    ConstructHashForShortSubstring(parameters, encoded_sequences, suffix_array, start_hash, end_hash);
+
+    SaveIndexData(parameters.GetDbFilename(), suffix_array, start_hash, end_hash);
+    SaveSequenceData(parameters.GetDbFilename(), sequences, encoded_sequences);
+  }
 }
 
-void DbConstruction::ReadFastaFile(const DbConstructionParameters parameters,  vector<string> &sequences){
-  vector<string> names; names.reserve(10);
+void DbConstruction::ReadFastaFile(const DbConstructionParameters parameters, vector<vector<string>> &sequences){
+  vector<vector<string>> vec_names;
   FastafileReader fastafile_reader;
-  fastafile_reader.ReadFastafile(parameters.GetInputFilename(), sequences, names);
-  SaveBasicInformation(parameters, names);
+  fastafile_reader.ReadFastafile(parameters.GetInputFilename(), sequences, vec_names, parameters.GetDbChunk());
+
+  ofstream ofs;
+  ofs.open((parameters.GetDbFilename() + ".nam").c_str(), ios::out);
+  for (int i = 0; i < vec_names.size(); i++) {
+    vector<string> names = vec_names[i];
+    for (int j = 0; j < names.size(); j++) {
+        ofs << names[j] << endl;
+    }
+  }
+  ofs.close();
+
+  SaveBasicInformation(parameters);
 }
 
 void DbConstruction::CalculateAccessibility(const DbConstructionParameters parameters, vector<string> &sequences){
@@ -80,7 +94,7 @@ void DbConstruction::ConstructHashForShortSubstring(const DbConstructionParamete
 }
 
 void DbConstruction::SaveSequenceData(string file_name, vector<string> &sequences, vector<unsigned char> &encoded_sequences){
-  ofstream of((file_name+".seq").c_str(), ios::out | ios::binary);
+  ofstream of((file_name+".seq").c_str(), ios::out | ios::binary | ios::app);
   int number_of_seq = sequences.size();
   of.write(reinterpret_cast<const char*>(&number_of_seq), sizeof(int));
   for(int i = 0; i < number_of_seq; i++){
@@ -97,7 +111,7 @@ void DbConstruction::SaveSequenceData(string file_name, vector<string> &sequence
 }
 
 void  DbConstruction::SaveIndexData(string file_name, vector<int> &suffix_array, vector<vector <int> > &start_hash, vector<vector <int> > &end_hash){
-  ofstream of((file_name+".ind").c_str(), ios::out | ios::binary);
+  ofstream of((file_name+".ind").c_str(), ios::out | ios::binary | ios::app);
   int count = suffix_array.size();
   vector<int>::iterator it;
   of.write(reinterpret_cast<const char*>(&count), sizeof(int));
@@ -117,7 +131,7 @@ void  DbConstruction::SaveIndexData(string file_name, vector<int> &suffix_array,
   of.close();
 }
 
-void DbConstruction::SaveBasicInformation(DbConstructionParameters parameters, vector<string> &names){
+void DbConstruction::SaveBasicInformation(DbConstructionParameters parameters){
   ofstream of((parameters.GetDbFilename()+".bas").c_str(), ios::out | ios::binary);
   int hash_size = parameters.GetHashSize();
   int repeat_flag = parameters.GetRepeatFlag();
@@ -127,12 +141,6 @@ void DbConstruction::SaveBasicInformation(DbConstructionParameters parameters, v
   of.write(reinterpret_cast<const char*>(&repeat_flag), sizeof(int));
   of.write(reinterpret_cast<const char*>(&maximal_span), sizeof(int));
   of.write(reinterpret_cast<const char*>(&min_accessible_length), sizeof(int));
-  of.close();
-  of.open((parameters.GetDbFilename()+".nam").c_str(), ios::out);
-  for(int i = 0; i < names.size(); i++){
-    of << names[i] << endl;
-  }
-
   of.close();
 }
 

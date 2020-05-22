@@ -14,7 +14,7 @@
 void RnaInteractionSearchParameters::SetParameters(int argc, char* argv[]) {
   int c;
   extern char *optarg;
-  while ((c = getopt(argc, argv, "i:o:d:l:e:y:x:f:g:s:m:")) != -1) {
+  while ((c = getopt(argc, argv, "i:o:d:l:e:y:x:f:g:s:m:q:t:p:")) != -1) {
     switch (c) {
     case 'i':
       _input_filename = optarg;
@@ -58,6 +58,18 @@ void RnaInteractionSearchParameters::SetParameters(int argc, char* argv[]) {
 
     case 'm':
       _min_helix_length = atoi(optarg);
+      break;
+
+    case 'q':
+      _num_queries = atoi(optarg);
+      break;
+
+    case 't':
+      _debug = atoi(optarg);
+      break;
+
+    case 'p':
+      _tmp_path = optarg;
       break;
 
     default:
