@@ -23,25 +23,24 @@ class Raccess {
   Raccess(string db_name, int w, int delta) {
     _maximal_span = w;
     _min_accessible_length = delta;
-    
+
     if(db_name.size() == 0){
       cerr << "Error: -o option is required." << endl;
       exit(1);
     }
     _db_name = db_name+".acc";
-    ofstream of(_db_name.c_str(), ios::out | ios::binary);
+    ofstream of(_db_name.c_str(), ios::out | ios::binary | ios::app);
     if (!of){
       cerr  << "Error: Cannot make " << _db_name << "." << endl;
       exit(1);
     }
     of.close();
-    
+
     if(delta <= 1){
       cerr << "Error: -d option must be greater than 1." << endl;
       exit(1);
     }
     _seq_length = 0;
-    
 
     set_energy_parameters();
   }

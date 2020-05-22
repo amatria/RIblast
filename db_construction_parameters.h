@@ -21,7 +21,8 @@ class DbConstructionParameters{
   int _repeat_flag;
   int _maximal_span;
   int _min_accessible_length;
-  
+  int _db_chunk;
+
  public:
   DbConstructionParameters(){
     _db_filename = "";
@@ -30,9 +31,10 @@ class DbConstructionParameters{
     _repeat_flag = 0;
     _maximal_span = 70;
     _min_accessible_length = 5;
+    _db_chunk = 3000;
   }
   void SetParameters(int argc, char* argv[]);
-  
+
   string GetDbFilename() const {
     return _db_filename;
   }
@@ -55,6 +57,10 @@ class DbConstructionParameters{
 
   int GetMinAccessibleLength() const {
     return _min_accessible_length;
+  }
+
+  int GetDbChunk() const {
+    return _db_chunk;
   }
 };
 

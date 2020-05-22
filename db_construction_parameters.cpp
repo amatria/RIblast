@@ -12,7 +12,7 @@
 void DbConstructionParameters::SetParameters(int argc, char* argv[]) {
   int c;
   extern char *optarg;
-  while ((c = getopt(argc, argv, "i:o:r:s:w:d:t:")) != -1) {
+  while ((c = getopt(argc, argv, "i:o:r:s:w:d:t:c:")) != -1) {
     switch (c) {
     case 'i':
       _input_filename = optarg;
@@ -33,9 +33,13 @@ void DbConstructionParameters::SetParameters(int argc, char* argv[]) {
     case 'w':
       _maximal_span = atoi(optarg);
       break;
-      
+
     case 'd':
       _min_accessible_length = atoi(optarg);
+      break;
+
+    case 'c':
+      _db_chunk = atoi(optarg);
       break;
 
     default:

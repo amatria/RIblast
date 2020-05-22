@@ -16,6 +16,7 @@
 #include "db_construction_parameters.h"
 #include "rna_interaction_search.h"
 #include "rna_interaction_search_parameters.h"
+#include "mpi.h"
 
 using namespace std;
 
@@ -38,6 +39,7 @@ void PrintUsage() {
   cout << "    -s INT    Lookup table size of short string search [default: 8]\n";
   cout << "    -w INT    The constraint of maximal distance between the bases that form base pairs. This parameter have to be set to 20 and over. [default: 70]\n";
   cout << "    -d INT    Minimum accessible length for accessibility approximation [defualt:5]\n";
+  cout << "    -c INT    Number of sequences per database chunk [default:3000]\n";
   cout << "\n";
   cout << "\n";
   cout << "ris: search RNA-RNA interaction between a query and database sequences\n";
@@ -61,9 +63,11 @@ void PrintUsage() {
   cout << "    -y INT    Dropout Length in ungapped extension [defualt:5]\n";
   cout << "    -g DBL    Energy threshold for output [defualt:-8.0]\n";
   cout << "    -s INT    Designation of output format style 0:simplified output, 1:detailed output [defualt:0]\n";
+  cout << "    -q INT    Number of queries. [default:reads file]\n";
+  cout << "    -t INT    Print processing times [default:0].\n";
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
   if(argc == 1 || strcmp(argv[1],"-h") == 0){
     PrintUsage();
     exit(1);
@@ -75,11 +79,13 @@ int main(int argc, char* argv[]) {
     DbConstruction db_construction;
     db_construction.Run(parameters);    
   }else if(strcmp(argv[1],"ris") == 0){
+    MPI_Init(&argc, &argv);
     RnaInteractionSearchParameters parameters;
     parameters.SetParameters(argc - 1, argv + 1);
     parameters.SetDbParameters();
-    RnaInteractionSearch rna_interaction_search(parameters.GetHashSize());
+    RnaInteractionSearch rna_interaction_search;
     rna_interaction_search.Run(parameters);
+    MPI_Finalize();
   }else{
     cerr << "Error: You must specify the mode of RIblast (db or ris)." << endl;
     exit(1);
