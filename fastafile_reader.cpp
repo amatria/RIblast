@@ -10,6 +10,27 @@
 #include <iostream>
 #include <algorithm>
 #include "mpi.h"
+#include "minmaxheap.h"
+
+using namespace minmaxheap;
+
+struct proc {
+  int rank, chars;
+  vector<int> indices;
+
+  proc(int rank, int chars) {
+    this->rank = rank;
+    this->chars = chars;
+  }
+
+  bool operator <(const proc& x) const {
+    return chars < x.chars;
+  }
+
+  bool operator >(const proc& x) const {
+    return chars > x.chars;
+  }
+};
 
 struct node {
   int idx, size;
@@ -24,8 +45,8 @@ struct node {
   }
 };
 
-int CountSequences(string input_file_name, vector<node> &nodes) {
-  int ret = 0, count = 1;
+void CountSequences(string input_file_name, vector<node> &nodes) {
+  int count = 1;
   string buffer;
   ifstream fp;
 
@@ -50,14 +71,11 @@ int CountSequences(string input_file_name, vector<node> &nodes) {
       if (buffer[buffer.size() - 1] == '\r' || buffer[buffer.size() - 1] == '\n') {
         buffer.erase(buffer.size() - 1, 1);
       }
-      ret += buffer.size();
       n.size += buffer.size();
     }
   }
   nodes.push_back(n);
   fp.close();
-
-  return ret;
 }
 
 void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequences, vector<string> &names){
@@ -65,52 +83,50 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
   vector<int> idx;
   string buffer;
   ifstream fp;
+  int *counts, *indices, *displ;
 
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &procs);
 
-  int *indices, *displ, *counts;
   counts = (int *) malloc(procs * sizeof(int));
   if (rank == 0) {
-    vector<node> nodes, tmp;
-    int t = 0;
-    int chars = CountSequences(input_file_name, nodes);
-    int avg_chars = chars / procs;
-    indices = (int *) malloc(nodes.size() * sizeof(int));
+    vector<node> nodes;
+    MinMaxHeap<proc> proc_heap(procs);
+    CountSequences(input_file_name, nodes);
+
     displ = (int *) malloc(procs * sizeof(int));
+    indices = (int *) malloc(nodes.size() * sizeof(int));
 
+    // populate min max heap
     for (int i = 0; i < procs; i++) {
-      counts[i] = 0;
-      int my_chars = 0;
-      make_heap(nodes.begin(), nodes.end());
-
-      while ((my_chars <= avg_chars || i == procs - 1) && !nodes.empty()) {
-        node n = nodes.front();
-        pop_heap(nodes.begin(), nodes.end());
-
-        if (my_chars + n.size <= avg_chars || my_chars == 0 || i == procs - 1) {
-          counts[i]++;
-          my_chars += n.size;
-          indices[t++] = n.idx;
-        } else {
-          tmp.push_back(nodes.back());
-        }
-
-        nodes.pop_back();
-      }
-      for (int j = 0; j < nodes.size(); j++) {
-        tmp.push_back(nodes[j]);
-      }
-
-      nodes = tmp;
-      tmp.clear();
+      proc_heap.insert(proc(i, 0));
     }
 
-    displ[0] = 0;
-    for (int i = 1; i < procs; i++) {
-      displ[i] = counts[i - 1] + displ[i - 1];
+    while (!nodes.empty()) {
+      node n = nodes[0];
+      proc p = proc_heap.popmin();
+
+      p.chars += n.size;
+      p.indices.push_back(n.idx);
+
+      proc_heap.insert(p);
+      nodes.erase(nodes.begin());
+    }
+
+    int k = 0;
+    vector<proc> proc_array = proc_heap.getheap();
+    for (int i = 0; i < procs; i++) {
+      proc p = proc_array[i];
+
+      counts[i] = p.indices.size();
+      for (int j = 0; j < counts[i]; j++) {
+        indices[k++] = p.indices[j];
+      }
+
+      displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
     }
   }
+
   MPI_Bcast(counts, procs, MPI_INT, 0, MPI_COMM_WORLD);
   idx.resize(counts[rank]);
   MPI_Scatterv(indices, counts, displ, MPI_INT, idx.data(), idx.size(),
