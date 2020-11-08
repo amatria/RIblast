@@ -41,7 +41,7 @@ struct node {
   }
 
   bool operator <(const node& x) const {
-    return size < x.size;
+    return x.size < size;
   }
 };
 
@@ -102,6 +102,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
       proc_heap.insert(proc(i, 0));
     }
 
+    sort(nodes.begin(), nodes.end());
     while (!nodes.empty()) {
       node n = nodes[0];
       proc p = proc_heap.popmin();
@@ -118,6 +119,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
     for (int i = 0; i < procs; i++) {
       proc p = proc_array[i];
 
+      cout << "Process #" << p.rank << " received " << p.indices.size() << " sequences (" << p.chars << " chars).\n";
       counts[i] = p.indices.size();
       for (int j = 0; j < counts[i]; j++) {
         indices[k++] = p.indices[j];
@@ -125,6 +127,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
 
       displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
     }
+    cout.flush();
   }
 
   MPI_Bcast(counts, procs, MPI_INT, 0, MPI_COMM_WORLD);
