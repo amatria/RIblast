@@ -45,6 +45,10 @@ struct node {
   }
 };
 
+const bool sort_procs(const proc& x, const proc& y) {
+  return x.rank < y.rank;
+}
+
 void CountSequences(string input_file_name, vector<node> &nodes) {
   int count = 1;
   string buffer;
@@ -116,6 +120,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
 
     int k = 0;
     vector<proc> proc_array = proc_heap.getheap();
+    sort(proc_array.begin(), proc_array.end(), sort_procs);
     for (int i = 0; i < procs; i++) {
       proc p = proc_array[i];
 

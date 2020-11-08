@@ -118,7 +118,7 @@ int merge_output(const RnaInteractionSearchParameters parameters, int rank, int 
 void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) {
   double my_read, my_search, my_write[2];
   int rank, procs, threads, *last;
-  double read, search, write[2];
+  double read, total_search = 0, search, write[2];
   vector<string> sequences;
   vector<string> names;
   DbReader db_reader(parameters.GetDbFilename(), parameters.GetHashSize());
@@ -160,7 +160,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   }
 
   if (parameters.GetDebug()) my_search = MPI_Wtime();
-  if (rank == 0) cout << "PRIblast has started." << endl;
+  if (rank == 0) cout << "pRIblast has started." << endl;
   #pragma omp parallel
   {
     threads = omp_get_num_threads();
@@ -218,8 +218,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     // environments
     // it is possible to use pt2pt instead of rdma and avoid this check
     // mpirun ... --mca osc pt2pt ...
-    // however pt2pt's passive target synchronization is not passive at all,
-    // leading into sequential writing times
+    // however pt2pt's implementation does not perform as good
     tmp = -1;
   }
 
@@ -245,18 +244,24 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
     MPI_Reduce(&my_search, &search, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     MPI_Reduce(&my_write[0], &write[0], 2, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&my_search, &total_search, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
       cout << "Time spent reading: " << read << " seconds." << endl;
       cout << "Time spent processing: " << search << " seconds." << endl;
       cout << "Time spent writing: " << write[1] - write[0] << " seconds." << endl;
       cout << "Total time: " << read + search + write[1] - write[0] << " seconds." << endl;
+      if (threads == 1) {
+        cout << "Approximate sequential time: " << total_search << " seconds." << endl;
+      }
+      cout.flush();
     }
   }
 
   MPI_Win_free(&win);
   if (rank == 0) {
     MPI_Free_mem(last);
+    cout << "pRiblast has ended." << endl;
   }
 }
 
