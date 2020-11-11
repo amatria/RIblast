@@ -9,18 +9,20 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <math.h>
 #include "mpi.h"
 #include "minmaxheap.h"
 
 using namespace minmaxheap;
 
 struct proc {
-  int rank, chars;
+  int rank, chars, r_chars;
   vector<int> indices;
 
-  proc(int rank, int chars) {
+  proc(int rank, int chars, int r_chars) {
     this->rank = rank;
     this->chars = chars;
+    this->r_chars = r_chars;
   }
 
   bool operator <(const proc& x) const {
@@ -103,7 +105,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
 
     // populate min max heap
     for (int i = 0; i < procs; i++) {
-      proc_heap.insert(proc(i, 0));
+      proc_heap.insert(proc(i, 0, 0));
     }
 
     sort(nodes.begin(), nodes.end());
@@ -111,7 +113,8 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
       node n = nodes[0];
       proc p = proc_heap.popmin();
 
-      p.chars += n.size;
+      p.r_chars += n.size;
+      p.chars += pow(n.size, 2);
       p.indices.push_back(n.idx);
 
       proc_heap.insert(p);
@@ -124,7 +127,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
     for (int i = 0; i < procs; i++) {
       proc p = proc_array[i];
 
-      cout << "Process #" << p.rank << " received " << p.indices.size() << " sequences (" << p.chars << " chars).\n";
+      cout << "Process #" << p.rank << " received " << p.indices.size() << " sequences (" << p.r_chars << " chars).\n";
       counts[i] = p.indices.size();
       for (int j = 0; j < counts[i]; j++) {
         indices[k++] = p.indices[j];
