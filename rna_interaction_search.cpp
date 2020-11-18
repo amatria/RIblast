@@ -69,6 +69,13 @@ void create_output_file(string output_file) {
   ofs.close();
 }
 
+void save_time(string time_file, double time) {
+  ofstream ofs;
+  ofs.open(time_file, ios::app);
+  ofs << time << "\n";
+  ofs.close();
+}
+
 int merge_output(const RnaInteractionSearchParameters parameters, int rank, int threads, int displ) {
   int count = displ;
   ifstream ifs;
@@ -163,13 +170,20 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   if (rank == 0) cout << "pRIblast has started." << endl;
   #pragma omp parallel
   {
+    double local_time;
     threads = omp_get_num_threads();
     string output_file = my_output_file(rank, omp_get_thread_num(),
                                         parameters.GetPath());
+    string time_file = my_output_file(rank, omp_get_thread_num(),
+                                      "/home/i.amatria/times/");
     create_output_file(output_file);
+    if (threads == 0) {
+      create_output_file(time_file);
+    }
 
     #pragma omp for schedule(dynamic)
     for(int i = 0; i < sequences.size(); i++) {
+      local_time = MPI_Wtime();
       vector<float> query_conditional_accessibility;
       vector<unsigned char> query_encoded_sequence;
       vector<float> query_accessibility;
@@ -195,6 +209,11 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
         Output(parameters, hit_result, query_name, length_count, output_file, j);
 
         hit_result.clear();
+      }
+
+      local_time = MPI_Wtime() - local_time;
+      if (threads == 1) {
+        save_time(time_file, local_time);
       }
     }
   }

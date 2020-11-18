@@ -16,10 +16,11 @@
 using namespace minmaxheap;
 
 struct proc {
-  int rank, chars, r_chars;
+  double chars;
+  int rank, r_chars;
   vector<int> indices;
 
-  proc(int rank, int chars, int r_chars) {
+  proc(int rank, double chars, int r_chars) {
     this->rank = rank;
     this->chars = chars;
     this->r_chars = r_chars;
@@ -43,7 +44,7 @@ struct node {
   }
 
   bool operator <(const node& x) const {
-    return x.size < size;
+    return size >= x.size;
   }
 };
 
@@ -114,7 +115,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
       proc p = proc_heap.popmin();
 
       p.r_chars += n.size;
-      p.chars += pow(n.size, 2);
+      p.chars += pow(n.size, 2.5);
       p.indices.push_back(n.idx);
 
       proc_heap.insert(p);
