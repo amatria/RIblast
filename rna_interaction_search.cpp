@@ -117,7 +117,7 @@ int merge_output(const RnaInteractionSearchParameters parameters, int rank, int 
 
 void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) {
   double my_read, my_search, my_write[2];
-  int rank, procs, threads, *last;
+  int rank, procs, threads, offset, *last;
   double read, search, write[2];
   vector<string> sequences;
   vector<string> names;
@@ -128,19 +128,20 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
   // create a shared variable
   if (rank == 0) {
-    MPI_Alloc_mem(sizeof(int), MPI_INFO_NULL, &last);
+    MPI_Alloc_mem(sizeof(int) * 2, MPI_INFO_NULL, &last);
 
     if (last == NULL) {
       cout << "Fatal error: cannot allocate memory." << endl;
       MPI_Abort(MPI_COMM_WORLD, 1);
     }
-    *last = -1;
+    last[0] = -1;
+    last[1] = 0;
   } else {
     last = NULL;
   }
 
   MPI_Win win;
-  MPI_Win_create(last, (rank == 0 ? sizeof(int) : 0), sizeof(int),
+  MPI_Win_create(last, (rank == 0 ? sizeof(int) * 2 : 0), sizeof(int),
                  MPI_INFO_NULL, MPI_COMM_WORLD, &win);
  
   if (parameters.GetDebug()) my_read = MPI_Wtime();
@@ -160,16 +161,35 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   }
 
   if (parameters.GetDebug()) my_search = MPI_Wtime();
-  if (rank == 0) cout << "PRIblast has started." << endl;
-  #pragma omp parallel
-  {
-    threads = omp_get_num_threads();
-    string output_file = my_output_file(rank, omp_get_thread_num(),
-                                        parameters.GetPath());
-    create_output_file(output_file);
+  if (rank == 0) cout << "pRIblast has started." << endl;
 
-    #pragma omp for schedule(dynamic)
-    for(int i = 0; i < sequences.size(); i++) {
+  // create output files
+  threads = omp_get_max_threads();
+  vector<string> output_files(threads);
+  for (int i = 0; i < threads; i++) {
+    output_files[i] = my_output_file(rank, i, parameters.GetPath());
+    create_output_file(output_files[i]);
+  }
+
+  while (1) {
+    int upper_bound;
+    if (procs > 1) {
+      MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, win);
+      MPI_Fetch_and_op(&threads, &offset, MPI_INT, 0, 1, MPI_SUM, win);
+      MPI_Win_unlock(0, win);
+
+      upper_bound = offset + threads < sequences.size() ? offset + threads : sequences.size();
+    } else {
+      offset = 0;
+      upper_bound = sequences.size();
+    }
+
+    if (offset >= sequences.size()) {
+      break;
+    }
+
+    #pragma omp parallel for schedule(dynamic)
+    for (int i = offset; i < upper_bound; i++) {
       vector<float> query_conditional_accessibility;
       vector<unsigned char> query_encoded_sequence;
       vector<float> query_accessibility;
@@ -192,10 +212,14 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
         SearchSeed(parameters,hit_result, query_encoded_sequence, query_suffix_array, query_accessibility, query_conditional_accessibility, j);
         ExtendWithoutGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
         ExtendWithGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
-        Output(parameters, hit_result, query_name, length_count, output_file, j);
+        Output(parameters, hit_result, query_name, length_count, output_files[omp_get_thread_num()], j);
 
         hit_result.clear();
       }
+    }
+
+    if (procs == 1) {
+      break;
     }
   }
   if (parameters.GetDebug()) {
@@ -262,7 +286,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
 void RnaInteractionSearch::ReadFastaFile(const RnaInteractionSearchParameters parameters, vector<string> &sequences, vector<string> &names){
   FastafileReader fastafile_reader;
-  fastafile_reader.ReadFastafile(parameters.GetInputFilename(), parameters.GetNumQueries(), sequences, names);
+  fastafile_reader.ReadFastafile(parameters.GetInputFilename(), sequences, names);
 };
 
 void RnaInteractionSearch::CalculateAccessibility(const RnaInteractionSearchParameters parameters, string &query_sequence, vector<float> &query_accessibility, vector<float> &query_conditional_accessibility){
