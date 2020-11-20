@@ -18,9 +18,9 @@
 #include <math.h>
 #include <algorithm>
 #include "mpi.h"
-#include <omp.h>
 #include <sstream>
 #include "database_reader.h"
+#include <omp.h>
 
 class sort_indices {
   private:
@@ -50,12 +50,12 @@ bool base_pair_compare(const BasePair& left, const BasePair& right) {
   return(left.qpos < right.qpos);
 }
 
-string my_output_file(int rank, int id, string path) {
+string my_output_file(int rank, int i, string path) {
   stringstream s;
   if (path != "") {
     s << path << "/";
   }
-  s << rank << "_" << id;
+  s << "priblast_tmp_" << rank << "_" << i;
   return s.str();
 }
 
@@ -69,12 +69,12 @@ void create_output_file(string output_file) {
   ofs.close();
 }
 
-int merge_output(const RnaInteractionSearchParameters parameters, int rank, int threads, int displ) {
+int merge_output(const RnaInteractionSearchParameters parameters, int rank, int threads, int displ, int crt) {
   int count = displ;
   ifstream ifs;
   ofstream ofs;
 
-  if (count == 0) {
+  if (crt) {
     ofs.open(parameters.GetOutputFilename().c_str(), ios::out);
   } else {
     ofs.open(parameters.GetOutputFilename().c_str(), ios::app);
@@ -85,7 +85,7 @@ int merge_output(const RnaInteractionSearchParameters parameters, int rank, int 
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
 
-  if (count == 0) {
+  if (crt) {
     ofs << "RIblast ris result\n";
     ofs << "input:" << parameters.GetInputFilename() << ",database:" << parameters.GetDbFilename() << ",RepeatFlag:" << parameters.GetRepeatFlag() << ",MaximalSpan:" << parameters.GetMaximalSpan() << ",MinAccessibleLength:" << parameters.GetMinAccessibleLength() << ",MaxSeedLength:" << parameters.GetMaxSeedLength() << ",InteractionEnergyThreshold:" << parameters.GetInteractionEnergyThreshold() << ",HybridEnergyThreshold:" << parameters.GetHybridEnergyThreshold() << ",FinalThreshold:" << parameters.GetFinalThreshold() << ",DropOutLengthWoGap:" << parameters.GetDropOutLengthWoGap() << ",DropOutLengthWGap:" << parameters.GetDropOutLengthWGap() << "\n";
     ofs << "Id,Query name, Query Length, Target name, Target Length, Accessibility Energy, Hybridization Energy, Interaction Energy, BasePair\n";
@@ -116,8 +116,8 @@ int merge_output(const RnaInteractionSearchParameters parameters, int rank, int 
 }
 
 void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) {
+  int rank, procs, offset = -1, threads, *last;
   double my_read, my_search, my_write[2];
-  int rank, procs, threads, offset, *last;
   double read, search, write[2];
   vector<string> sequences;
   vector<string> names;
@@ -139,11 +139,11 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   } else {
     last = NULL;
   }
-
   MPI_Win win;
   MPI_Win_create(last, (rank == 0 ? sizeof(int) * 2 : 0), sizeof(int),
                  MPI_INFO_NULL, MPI_COMM_WORLD, &win);
  
+  // read input file and db
   if (parameters.GetDebug()) my_read = MPI_Wtime();
   ReadFastaFile(parameters, sequences, names);
   _dbs = db_reader.load_dbs();
@@ -160,10 +160,6 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     MPI_Reduce(&my_read, &read, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
   }
 
-  if (parameters.GetDebug()) my_search = MPI_Wtime();
-  if (rank == 0) cout << "pRIblast has started." << endl;
-
-  // create output files
   threads = omp_get_max_threads();
   vector<string> output_files(threads);
   for (int i = 0; i < threads; i++) {
@@ -171,56 +167,57 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     create_output_file(output_files[i]);
   }
 
+  // priblast algorithm
+  if (parameters.GetDebug()) my_search = MPI_Wtime();
+  if (rank == 0) cout << "pRIblast has started." << endl;
+
+  int one = 1;
+  #pragma omp parallel
   while (1) {
-    int upper_bound;
-    if (procs > 1) {
-      MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, win);
-      MPI_Fetch_and_op(&threads, &offset, MPI_INT, 0, 1, MPI_SUM, win);
-      MPI_Win_unlock(0, win);
+    int i;
 
-      upper_bound = offset + threads < sequences.size() ? offset + threads : sequences.size();
-    } else {
-      offset = 0;
-      upper_bound = sequences.size();
+    #pragma omp critical
+    {
+      if (procs > 1) {
+        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, win);
+        MPI_Fetch_and_op(&one, &offset, MPI_INT, 0, 1, MPI_SUM, win);
+        MPI_Win_unlock(0, win);
+      } else {
+        offset++;
+      }
+
+      i = offset;
     }
-
-    if (offset >= sequences.size()) {
+    if (i >= sequences.size()) {
       break;
     }
 
-    #pragma omp parallel for schedule(dynamic)
-    for (int i = offset; i < upper_bound; i++) {
-      vector<float> query_conditional_accessibility;
-      vector<unsigned char> query_encoded_sequence;
-      vector<float> query_accessibility;
-      vector<int> query_suffix_array;
-      vector<Hit> hit_result;
+    vector<float> query_conditional_accessibility;
+    vector<unsigned char> query_encoded_sequence;
+    vector<float> query_accessibility;
+    vector<int> query_suffix_array;
+    vector<Hit> hit_result;
 
-      string query_sequence = sequences[indices[i]];
-      string query_name = names[indices[i]];
+    string query_sequence = sequences[indices[i]];
+    string query_name = names[indices[i]];
 
-      CalculateAccessibility(parameters, query_sequence, query_accessibility, query_conditional_accessibility);
-      ConstructSuffixArray(parameters, query_sequence, query_encoded_sequence, query_suffix_array);
-      int length_count = 0;
-      for (int j= 0; j < query_encoded_sequence.size(); j++) {
-        if (query_encoded_sequence[j] >= 2 && query_encoded_sequence[j] <= 5) {
-          length_count++;
-        }
-      }
-
-      for (int j = 0; j < _dbs.size(); j++) {
-        SearchSeed(parameters,hit_result, query_encoded_sequence, query_suffix_array, query_accessibility, query_conditional_accessibility, j);
-        ExtendWithoutGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
-        ExtendWithGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
-        Output(parameters, hit_result, query_name, length_count, output_files[omp_get_thread_num()], j);
-
-        hit_result.clear();
+    CalculateAccessibility(parameters, query_sequence, query_accessibility, query_conditional_accessibility);
+    ConstructSuffixArray(parameters, query_sequence, query_encoded_sequence, query_suffix_array);
+    int length_count = 0;
+    for (int j= 0; j < query_encoded_sequence.size(); j++) {
+      if (query_encoded_sequence[j] >= 2 && query_encoded_sequence[j] <= 5) {
+        length_count++;
       }
     }
 
-    if (procs == 1) {
-      break;
-    }
+    for (int j = 0; j < _dbs.size(); j++) {
+      SearchSeed(parameters,hit_result, query_encoded_sequence, query_suffix_array, query_accessibility, query_conditional_accessibility, j);
+      ExtendWithoutGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
+      ExtendWithGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
+      Output(parameters, hit_result, query_name, length_count, output_files[omp_get_thread_num()], j);
+
+      hit_result.clear();
+    } 
   }
   if (parameters.GetDebug()) {
     my_search = MPI_Wtime() - my_search;
@@ -256,7 +253,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     data[1] = 0;
   }
 
-  data[0] = merge_output(parameters, rank, threads, data[0]);
+  data[0] = merge_output(parameters, rank, threads, data[0], data[1] == 0);
 
   if (++data[1] != procs) {
     MPI_Recv(&src, 1, MPI_INT, MPI_ANY_SOURCE, rank, MPI_COMM_WORLD,
