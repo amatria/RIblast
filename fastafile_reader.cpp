@@ -44,7 +44,7 @@ struct node {
   }
 
   bool operator <(const node& x) const {
-    return size >= x.size;
+    return size < x.size;
   }
 };
 
@@ -115,7 +115,7 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
       proc p = proc_heap.popmin();
 
       p.r_chars += n.size;
-      p.chars += pow(n.size, 2.5);
+      p.chars += pow(n.size, 1);
       p.indices.push_back(n.idx);
 
       proc_heap.insert(p);

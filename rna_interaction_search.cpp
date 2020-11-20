@@ -69,10 +69,10 @@ void create_output_file(string output_file) {
   ofs.close();
 }
 
-void save_time(string time_file, double time) {
+void save_time(string time_file, int length, double time) {
   ofstream ofs;
   ofs.open(time_file, ios::app);
-  ofs << time << "\n";
+  ofs << length << " " << time << "\n";
   ofs.close();
 }
 
@@ -213,7 +213,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
       local_time = MPI_Wtime() - local_time;
       if (threads == 1) {
-        save_time(time_file, local_time);
+        save_time(time_file, query_sequence.size(), local_time);
       }
     }
   }
