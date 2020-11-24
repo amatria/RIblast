@@ -9,21 +9,18 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include <math.h>
 #include "mpi.h"
 #include "minmaxheap.h"
 
 using namespace minmaxheap;
 
 struct proc {
-  double chars;
-  int rank, r_chars;
+  int rank, chars;
   vector<int> indices;
 
-  proc(int rank, double chars, int r_chars) {
+  proc(int rank, int chars) {
     this->rank = rank;
     this->chars = chars;
-    this->r_chars = r_chars;
   }
 
   bool operator <(const proc& x) const {
@@ -44,7 +41,7 @@ struct node {
   }
 
   bool operator <(const node& x) const {
-    return size < x.size;
+    return size >= x.size;
   }
 };
 
@@ -52,105 +49,11 @@ const bool sort_procs(const proc& x, const proc& y) {
   return x.rank < y.rank;
 }
 
-void CountSequences(string input_file_name, vector<node> &nodes) {
-  int count = 1;
+void read_seqs(string input_file_name, vector<int> idx,
+               vector<string> &sequences, vector<string> &names) {
   string buffer;
   ifstream fp;
 
-  fp.open(input_file_name.c_str(), ios::in);
-  if (!fp) {
-    cout << "Error: can't open input_file: " << input_file_name << "." << endl;
-    MPI_Abort(MPI_COMM_WORLD, 1);
-  }
-
-  getline(fp, buffer);
-  node n(count, 0);
-  while (getline(fp, buffer)) {
-    if (buffer[0] == '>') {
-        nodes.push_back(n);
-        n = node(++count, 0);
-    } else {
-      if (buffer.size() >= 2) {
-        if (buffer.substr(buffer.size() - 2, 2) == "\r\n") {
-          buffer.erase(buffer.size() - 2, 2);
-        }
-      }
-      if (buffer[buffer.size() - 1] == '\r' || buffer[buffer.size() - 1] == '\n') {
-        buffer.erase(buffer.size() - 1, 1);
-      }
-      n.size += buffer.size();
-    }
-  }
-  nodes.push_back(n);
-  fp.close();
-}
-
-void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequences, vector<string> &names){
-  int rank, procs;
-  vector<int> idx;
-  string buffer;
-  ifstream fp;
-  int *counts, *indices, *displ;
-
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &procs);
-
-  counts = (int *) malloc(procs * sizeof(int));
-  if (rank == 0) {
-    vector<node> nodes;
-    MinMaxHeap<proc> proc_heap(procs);
-    CountSequences(input_file_name, nodes);
-
-    displ = (int *) malloc(procs * sizeof(int));
-    indices = (int *) malloc(nodes.size() * sizeof(int));
-
-    // populate min max heap
-    for (int i = 0; i < procs; i++) {
-      proc_heap.insert(proc(i, 0, 0));
-    }
-
-    sort(nodes.begin(), nodes.end());
-    while (!nodes.empty()) {
-      node n = nodes[0];
-      proc p = proc_heap.popmin();
-
-      p.r_chars += n.size;
-      p.chars += pow(n.size, 1);
-      p.indices.push_back(n.idx);
-
-      proc_heap.insert(p);
-      nodes.erase(nodes.begin());
-    }
-
-    int k = 0;
-    vector<proc> proc_array = proc_heap.getheap();
-    sort(proc_array.begin(), proc_array.end(), sort_procs);
-    for (int i = 0; i < procs; i++) {
-      proc p = proc_array[i];
-
-      cout << "Process #" << p.rank << " received " << p.indices.size() << " sequences (" << p.r_chars << " chars).\n";
-      counts[i] = p.indices.size();
-      for (int j = 0; j < counts[i]; j++) {
-        indices[k++] = p.indices[j];
-      }
-
-      displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
-    }
-    cout.flush();
-  }
-
-  MPI_Bcast(counts, procs, MPI_INT, 0, MPI_COMM_WORLD);
-  idx.resize(counts[rank]);
-  MPI_Scatterv(indices, counts, displ, MPI_INT, idx.data(), idx.size(),
-               MPI_INT, 0, MPI_COMM_WORLD);
-
-  free(counts);
-  if (rank == 0) {
-    free(indices);
-    free(displ);
-  }
-
-  sort(idx.begin(), idx.end());
   fp.open(input_file_name.c_str(), ios::in);
   if (!fp) {
     cout << "Error: can't open input_file: " << input_file_name << "." << endl;
@@ -195,6 +98,106 @@ void FastafileReader::ReadFastafile(string input_file_name, vector<string> &sequ
   }
 
   fp.close();
+}
+
+void CountSequences(string input_file_name, vector<node> &nodes) {
+  int count = 1;
+  string buffer;
+  ifstream fp;
+
+  fp.open(input_file_name.c_str(), ios::in);
+  if (!fp) {
+    cout << "Error: can't open input_file: " << input_file_name << "." << endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  getline(fp, buffer);
+  node n(count, 0);
+  while (getline(fp, buffer)) {
+    if (buffer[0] == '>') {
+        nodes.push_back(n);
+        n = node(++count, 0);
+    } else {
+      if (buffer.size() >= 2) {
+        if (buffer.substr(buffer.size() - 2, 2) == "\r\n") {
+          buffer.erase(buffer.size() - 2, 2);
+        }
+      }
+      if (buffer[buffer.size() - 1] == '\r' || buffer[buffer.size() - 1] == '\n') {
+        buffer.erase(buffer.size() - 1, 1);
+      }
+      n.size += buffer.size();
+    }
+  }
+  nodes.push_back(n);
+  fp.close();
+}
+
+void FastafileReader::ReadFastafile(string input_file_name,
+                                    vector<string> &sequences,
+                                    vector<string> &names,
+                                    vector<int> &idx) {
+  int rank, procs;
+  int *counts, *indices, *displ;
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &procs);
+
+  counts = (int *) malloc(procs * sizeof(int));
+  if (rank == 0) {
+    vector<node> nodes;
+    MinMaxHeap<proc> proc_heap(procs);
+    CountSequences(input_file_name, nodes);
+
+    displ = (int *) malloc(procs * sizeof(int));
+    indices = (int *) malloc(nodes.size() * sizeof(int));
+
+    // populate min max heap
+    for (int i = 0; i < procs; i++) {
+      proc_heap.insert(proc(i, 0));
+    }
+
+    sort(nodes.begin(), nodes.end());
+    while (!nodes.empty()) {
+      node n = nodes[0];
+      proc p = proc_heap.popmin();
+
+      p.chars += n.size;
+      p.indices.push_back(n.idx);
+
+      proc_heap.insert(p);
+      nodes.erase(nodes.begin());
+    }
+
+    int k = 0;
+    vector<proc> proc_array = proc_heap.getheap();
+    sort(proc_array.begin(), proc_array.end(), sort_procs);
+    for (int i = 0; i < procs; i++) {
+      proc p = proc_array[i];
+
+      counts[i] = p.indices.size();
+      for (int j = 0; j < counts[i]; j++) {
+        indices[k++] = p.indices[j];
+      }
+
+      displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
+    }
+  }
+
+  MPI_Bcast(counts, procs, MPI_INT, 0, MPI_COMM_WORLD);
+  idx.resize(counts[rank]);
+  MPI_Scatterv(indices, counts, displ, MPI_INT, idx.data(), idx.size(),
+               MPI_INT, 0, MPI_COMM_WORLD);
+
+  free(counts);
+  if (rank == 0) {
+    free(indices);
+    free(displ);
+  }
+
+  // now read the file
+  sort(idx.begin(), idx.end());
+  read_seqs(input_file_name, idx, sequences, names);
 }
 
 void FastafileReader::ReadFastafile(string input_file_name, vector<vector<string>> &vec_sequences, vector<vector<string>> &vec_names, int max_seqs) {

@@ -26,7 +26,7 @@ class RnaInteractionSearch {
   }
   void Run(const RnaInteractionSearchParameters parameters);
  private:
-  void ReadFastaFile(const RnaInteractionSearchParameters parameters, vector<string> &sequences, vector<string> &names);
+  void ReadFastaFile(const RnaInteractionSearchParameters parameters, vector<string> &sequences, vector<string> &names, vector<int> &idx);
   void CalculateAccessibility(const RnaInteractionSearchParameters parameters, string &query_sequence, vector<float> &query_accessibility, vector<float> &query_conditional_accessibility);
   void ConstructSuffixArray(const RnaInteractionSearchParameters parameters, string &query_sequence,  vector<unsigned char> &query_encoded_sequence, vector<int> &query_suffix_array);
   void SearchSeed(const RnaInteractionSearchParameters parameters, vector<Hit> &hit_result, vector<unsigned char> &query_encoded_sequence, vector<int> &query_suffix_array, vector<float> &query_accessibility, vector<float> &query_conditional_accessibility, int idx);

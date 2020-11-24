@@ -14,7 +14,7 @@
 void RnaInteractionSearchParameters::SetParameters(int argc, char* argv[]) {
   int c;
   extern char *optarg;
-  while ((c = getopt(argc, argv, "i:o:d:l:e:y:x:f:g:s:m:q:t:p:")) != -1) {
+  while ((c = getopt(argc, argv, "i:o:d:l:e:y:x:f:g:s:m:q:t:p:a:")) != -1) {
     switch (c) {
     case 'i':
       _input_filename = optarg;

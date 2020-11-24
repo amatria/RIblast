@@ -21,6 +21,21 @@
 #include <omp.h>
 #include <sstream>
 #include "database_reader.h"
+#include <sys/stat.h>
+
+struct acc_node {
+  int idx;
+  float val;
+
+  acc_node(int idx, float val) {
+    this->idx = idx;
+    this->val = val;
+  }
+
+  bool operator <(const acc_node& x) const {
+    return val < x.val;
+  }
+};
 
 class sort_indices {
   private:
@@ -50,12 +65,33 @@ bool base_pair_compare(const BasePair& left, const BasePair& right) {
   return(left.qpos < right.qpos);
 }
 
+string my_acc_dir(string path) {
+  stringstream s;
+  int rank;
+  
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  if (path != "") {
+    s << path << "/";
+  }
+  s << "priblast_acc_" << rank;
+  return s.str();
+}
+
+string my_acc_file(int idx, string path) {
+  stringstream s;
+  if (path != "") {
+    s << path << "/";
+  }
+  s << idx;
+  return s.str();
+}
+
 string my_output_file(int rank, int id, string path) {
   stringstream s;
   if (path != "") {
     s << path << "/";
   }
-  s << rank << "_" << id;
+  s << "priblast_out_ " << rank << "_" << id;
   return s.str();
 }
 
@@ -69,19 +105,13 @@ void create_output_file(string output_file) {
   ofs.close();
 }
 
-void save_time(string time_file, int length, double time) {
-  ofstream ofs;
-  ofs.open(time_file, ios::app);
-  ofs << length << " " << time << "\n";
-  ofs.close();
-}
-
-int merge_output(const RnaInteractionSearchParameters parameters, int rank, int threads, int displ) {
+int merge_output(const RnaInteractionSearchParameters parameters, int rank,
+                 int threads, int displ, int crt) {
   int count = displ;
   ifstream ifs;
   ofstream ofs;
 
-  if (count == 0) {
+  if (crt) {
     ofs.open(parameters.GetOutputFilename().c_str(), ios::out);
   } else {
     ofs.open(parameters.GetOutputFilename().c_str(), ios::app);
@@ -92,7 +122,7 @@ int merge_output(const RnaInteractionSearchParameters parameters, int rank, int 
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
 
-  if (count == 0) {
+  if (crt) {
     ofs << "RIblast ris result\n";
     ofs << "input:" << parameters.GetInputFilename() << ",database:" << parameters.GetDbFilename() << ",RepeatFlag:" << parameters.GetRepeatFlag() << ",MaximalSpan:" << parameters.GetMaximalSpan() << ",MinAccessibleLength:" << parameters.GetMinAccessibleLength() << ",MaxSeedLength:" << parameters.GetMaxSeedLength() << ",InteractionEnergyThreshold:" << parameters.GetInteractionEnergyThreshold() << ",HybridEnergyThreshold:" << parameters.GetHybridEnergyThreshold() << ",FinalThreshold:" << parameters.GetFinalThreshold() << ",DropOutLengthWoGap:" << parameters.GetDropOutLengthWoGap() << ",DropOutLengthWGap:" << parameters.GetDropOutLengthWGap() << "\n";
     ofs << "Id,Query name, Query Length, Target name, Target Length, Accessibility Energy, Hybridization Energy, Interaction Energy, BasePair\n";
@@ -122,14 +152,81 @@ int merge_output(const RnaInteractionSearchParameters parameters, int rank, int 
   return count;
 }
 
+float save_acc(string output_file, vector<float> &acc,
+               vector<float> &cond_acc) {
+  ofstream ofs;
+  float f;
+  int s;
+
+  ofs.open(output_file.c_str(), ios::out | ios::binary);
+  if (!ofs) {
+    cout << "Error: can't open acc_file: " << output_file << "." << endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  s = acc.size();
+  ofs.write(reinterpret_cast<const char*>(&s), sizeof(int));
+  for (int i = 0; i < s; i++) {
+    f = acc[i];
+    ofs.write(reinterpret_cast<const char*>(&f), sizeof(float));
+  }
+  s = cond_acc.size();
+  ofs.write(reinterpret_cast<const char*>(&s), sizeof(int));
+  for (int i = 0; i < s; i++) {
+    f = cond_acc[i];
+    ofs.write(reinterpret_cast<const char*>(&f), sizeof(float));
+  }
+  ofs.close();
+
+  f = 0;
+  for (int i = 0; i < acc.size(); i++) {
+    f += acc[i];
+  }
+  for (int i = 0; i < cond_acc.size(); i++) {
+    f += cond_acc[i];
+  }
+  return f;
+}
+
+void load_acc(string input_file, vector<float> &acc, vector<float> &cond_acc) {
+  vector<float>::iterator it;
+  ifstream ifs;
+  int s;
+  
+  ifs.open(input_file.c_str(), ios::in | ios::binary);
+  if (!ifs) {
+    cout << "Error: can't open acc_file: " << input_file << "." << endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+  
+  ifs.read(reinterpret_cast<char*>(&s), sizeof(int));
+  acc.assign(s, 0.0);
+  for (it = acc.begin(); it != acc.end(); it++) {
+      ifs.read(reinterpret_cast<char*>(&*it), sizeof(float));
+  }
+  ifs.read(reinterpret_cast<char*>(&s), sizeof(int));
+  cond_acc.assign(s, 0.0);
+  for (it = cond_acc.begin(); it != cond_acc.end(); it++) {
+      ifs.read(reinterpret_cast<char*>(&*it), sizeof(float));
+  }
+  
+  ifs.close();
+
+  if (remove(input_file.c_str()) != 0) {
+    cout << "Warning: there was an error deleting acc_file: " << input_file << "." << endl;
+  }
+}
+
 void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) {
+  DbReader db_reader(parameters.GetDbFilename(), parameters.GetHashSize());
+  double read, total_search = 0, search, write[2];
   double my_read, my_search, my_write[2];
   int rank, procs, threads, *last;
-  double read, total_search = 0, search, write[2];
   vector<string> sequences;
   vector<string> names;
-  DbReader db_reader(parameters.GetDbFilename(), parameters.GetHashSize());
+  vector<int> idx;
 
+  threads = omp_get_max_threads();
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &procs);
 
@@ -149,9 +246,14 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   MPI_Win win;
   MPI_Win_create(last, (rank == 0 ? sizeof(int) : 0), sizeof(int),
                  MPI_INFO_NULL, MPI_COMM_WORLD, &win);
- 
+
+  if (mkdir(my_acc_dir(parameters.GetPath()).c_str(), 0777) == -1) {
+    cout << "Fatal error: cannot create acc directory." << endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
   if (parameters.GetDebug()) my_read = MPI_Wtime();
-  ReadFastaFile(parameters, sequences, names);
+  ReadFastaFile(parameters, sequences, names, idx);
   _dbs = db_reader.load_dbs();
 
   // sort sequences according to their size
@@ -168,55 +270,67 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
   if (parameters.GetDebug()) my_search = MPI_Wtime();
   if (rank == 0) cout << "pRIblast has started." << endl;
-  #pragma omp parallel
-  {
-    double local_time;
-    threads = omp_get_num_threads();
-    string output_file = my_output_file(rank, omp_get_thread_num(),
-                                        parameters.GetPath());
-    string time_file = my_output_file(rank, omp_get_thread_num(),
-                                      "/home/i.amatria/times/");
-    create_output_file(output_file);
-    if (threads == 0) {
-      create_output_file(time_file);
+
+  vector<string> output_files(threads);
+  for (int i = 0; i < threads; i++) {
+    string out_file = my_output_file(rank, i, parameters.GetPath());
+    output_files[i] = out_file;
+    create_output_file(out_file);
+  }
+
+  vector<acc_node> acc_vals;
+  acc_vals.reserve(sequences.size());
+  #pragma omp parallel for schedule(dynamic)
+  for (int i = 0; i < sequences.size(); i++) {
+    vector<float> query_cond_accessibility;
+    vector<float> query_accessibility;
+
+    string query_sequence = sequences[indices[i]];
+    string path = my_acc_file(i, my_acc_dir(parameters.GetPath()));
+
+    CalculateAccessibility(parameters, query_sequence, query_accessibility,
+                           query_cond_accessibility);
+    float f = save_acc(path, query_accessibility, query_cond_accessibility);
+
+    #pragma omp critical
+    acc_vals.push_back(acc_node(i, f / query_sequence.size()));
+  }
+
+  sort(acc_vals.begin(), acc_vals.end());
+
+  #pragma omp parallel for schedule(dynamic)
+  for(int i = 0; i < acc_vals.size(); i++) {
+    vector<float> query_conditional_accessibility;
+    vector<unsigned char> query_encoded_sequence;
+    vector<float> query_accessibility;
+    vector<int> query_suffix_array;
+    vector<Hit> hit_result;
+
+    int idx = acc_vals[i].idx;
+    string query_sequence = sequences[indices[idx]];
+    string query_name = names[indices[idx]];
+
+    string path = my_acc_file(idx, my_acc_dir(parameters.GetPath()));
+    load_acc(path, query_accessibility, query_conditional_accessibility);
+    ConstructSuffixArray(parameters, query_sequence, query_encoded_sequence, query_suffix_array);
+    int length_count = 0;
+    for (int j= 0; j < query_encoded_sequence.size(); j++) {
+      if (query_encoded_sequence[j] >= 2 && query_encoded_sequence[j] <= 5) {
+        length_count++;
+      }
     }
 
-    #pragma omp for schedule(dynamic)
-    for(int i = 0; i < sequences.size(); i++) {
-      local_time = MPI_Wtime();
-      vector<float> query_conditional_accessibility;
-      vector<unsigned char> query_encoded_sequence;
-      vector<float> query_accessibility;
-      vector<int> query_suffix_array;
-      vector<Hit> hit_result;
+    for (int j = 0; j < _dbs.size(); j++) {
+      SearchSeed(parameters, hit_result, query_encoded_sequence, query_suffix_array, query_accessibility, query_conditional_accessibility, j);
+      ExtendWithoutGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
+      ExtendWithGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
+      Output(parameters, hit_result, query_name, length_count, output_files[omp_get_thread_num()], j);
 
-      string query_sequence = sequences[indices[i]];
-      string query_name = names[indices[i]];
-
-      CalculateAccessibility(parameters, query_sequence, query_accessibility, query_conditional_accessibility);
-      ConstructSuffixArray(parameters, query_sequence, query_encoded_sequence, query_suffix_array);
-      int length_count = 0;
-      for (int j= 0; j < query_encoded_sequence.size(); j++) {
-        if (query_encoded_sequence[j] >= 2 && query_encoded_sequence[j] <= 5) {
-          length_count++;
-        }
-      }
-
-      for (int j = 0; j < _dbs.size(); j++) {
-        SearchSeed(parameters, hit_result, query_encoded_sequence, query_suffix_array, query_accessibility, query_conditional_accessibility, j);
-        ExtendWithoutGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
-        ExtendWithGap(parameters,hit_result, query_encoded_sequence, query_accessibility, query_conditional_accessibility, j);
-        Output(parameters, hit_result, query_name, length_count, output_file, j);
-
-        hit_result.clear();
-      }
-
-      local_time = MPI_Wtime() - local_time;
-      if (threads == 1) {
-        save_time(time_file, query_sequence.size(), local_time);
-      }
+      hit_result.clear();
     }
   }
+  remove(my_acc_dir(parameters.GetPath()).c_str());
+
   if (parameters.GetDebug()) {
     my_search = MPI_Wtime() - my_search;
     my_write[0] = MPI_Wtime();
@@ -250,7 +364,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     data[1] = 0;
   }
 
-  data[0] = merge_output(parameters, rank, threads, data[0]);
+  data[0] = merge_output(parameters, rank, threads, data[0], data[1] == 0);
 
   if (++data[1] != procs) {
     MPI_Recv(&src, 1, MPI_INT, MPI_ANY_SOURCE, rank, MPI_COMM_WORLD,
@@ -284,9 +398,9 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   }
 }
 
-void RnaInteractionSearch::ReadFastaFile(const RnaInteractionSearchParameters parameters, vector<string> &sequences, vector<string> &names){
+void RnaInteractionSearch::ReadFastaFile(const RnaInteractionSearchParameters parameters, vector<string> &sequences, vector<string> &names, vector<int> &idx){
   FastafileReader fastafile_reader;
-  fastafile_reader.ReadFastafile(parameters.GetInputFilename(), sequences, names);
+  fastafile_reader.ReadFastafile(parameters.GetInputFilename(), sequences, names, idx);
 };
 
 void RnaInteractionSearch::CalculateAccessibility(const RnaInteractionSearchParameters parameters, string &query_sequence, vector<float> &query_accessibility, vector<float> &query_conditional_accessibility){

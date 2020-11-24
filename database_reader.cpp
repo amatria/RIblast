@@ -111,12 +111,12 @@ int DbReader::load_chunk(vector<int> &start_pos, vector<int> &seq_length,
         _acc.read(reinterpret_cast<char*>(&aux_i), sizeof(int));
         tmp.assign(aux_i, 0.0);
         for (it = tmp.begin(); it != tmp.end(); it++) {
-            _acc.read(reinterpret_cast<char*>(&*it), sizeof(int));
+            _acc.read(reinterpret_cast<char*>(&*it), sizeof(float));
         }
         _acc.read(reinterpret_cast<char*>(&aux_i), sizeof(int));
         c_tmp.assign(aux_i, 0.0);
         for (it = c_tmp.begin(); it != c_tmp.end(); it++) {
-            _acc.read(reinterpret_cast<char*>(&*it), sizeof(int));
+            _acc.read(reinterpret_cast<char*>(&*it), sizeof(float));
         }
         access.push_back(tmp);
         cond_access.push_back(c_tmp);
