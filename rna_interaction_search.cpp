@@ -27,6 +27,11 @@
 struct acc_node {
   int idx;
   float val;
+  
+  acc_node() {
+    this->idx = 0;
+    this->val = 0.0;
+  }
 
   acc_node(int idx, float val) {
     this->idx = idx;
@@ -93,15 +98,6 @@ string acc_file(string path, int idx) {
     s << path << "/";
   }
   s << idx;
-  return s.str();
-}
-
-string my_acc_file(string path, int rank, int thread) {
-    stringstream s;
-  if (path != "") {
-    s << path << "/";
-  }
-  s << "_" << rank << "_" << thread;
   return s.str();
 }
 
@@ -244,6 +240,8 @@ void balance_workload(const RnaInteractionSearchParameters parameters,
   int rank, procs, size;
   int *counts, *displ;
 
+  sort(nodes.begin(), nodes.end());
+
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &procs);
 
@@ -352,47 +350,30 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   if (parameters.GetDebug()) my_search = MPI_Wtime();
   if (rank == 0) cout << "pRIblast has started." << endl;
 
-  vector<string> acc_files(threads);
   vector<string> output_files(threads);
   for (int i = 0; i < threads; i++) {
     string out_file = my_output_file(rank, i, parameters.GetPath());
-    string acc_file = my_acc_file(shared_dir, rank, i);
     output_files[i] = out_file;
-    acc_files[i] = acc_file;
     create_output_file(out_file);
-    create_output_file(acc_file);
-    
   }
 
-  #pragma omp parallel
-  {
-    ofstream ofs;
+  vector<acc_node> acc_vals;
+  #pragma omp parallel for schedule(dynamic)
+  for (int i = 0; i < sequences.size(); i++) {
+    vector<float> query_cond_accessibility;
+    vector<float> query_accessibility;
 
-    ofs.open(acc_files[omp_get_thread_num()], ios::out);
-    if (!ofs) {
-      cout << "Fatal error: can't open acc_file: " << acc_files[omp_get_thread_num()] << ".\n";
-      MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    int ii = indices[i];
 
-    #pragma omp for schedule(dynamic)
-    for (int i = 0; i < sequences.size(); i++) {
-      vector<float> query_cond_accessibility;
-      vector<float> query_accessibility;
+    string query_sequence = sequences[ii];
+    string path = acc_file(shared_dir, idx[ii]);
 
-      int ii = indices[i];
+    CalculateAccessibility(parameters, query_sequence, query_accessibility,
+                     query_cond_accessibility);
+    float f = save_acc(path, query_accessibility, query_cond_accessibility);
 
-      string query_sequence = sequences[ii];
-      string path = acc_file(shared_dir, idx[ii]);
-
-      CalculateAccessibility(parameters, query_sequence, query_accessibility,
-	                     query_cond_accessibility);
-      float f = save_acc(path, query_accessibility, query_cond_accessibility);
-      
-      ofs << idx[ii] << " " << f / query_sequence.size() << "\n";
-    }
-
-    ofs << "-1 0.0\n";
-    ofs.close();
+    #pragma omp critical
+    acc_vals.push_back(acc_node(idx[ii], f / query_sequence.size()));
   }
 
   sequences.clear();
@@ -400,43 +381,51 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   names.clear();
   idx.clear();
 
-  MPI_Barrier(MPI_COMM_WORLD);
+  // send num queries
+  int num_queries = acc_vals.size();
+  int *counts;
+  if (rank == 0) {
+    counts = (int *) malloc(procs * sizeof(int));
+  }
+  MPI_Gather(&num_queries, 1, MPI_INT, counts, 1, MPI_INT, 0,
+             MPI_COMM_WORLD);
 
+  // serialize acc_node struct
+  int block_lengths[2] = {1, 1};
+  MPI_Datatype types[2] = {MPI_INT, MPI_FLOAT};
+  MPI_Datatype acc_node_type;
+  MPI_Aint offsets[2];
+
+  offsets[0] = offsetof(acc_node, idx);
+  offsets[1] = offsetof(acc_node, val);
+
+  MPI_Type_create_struct(2, block_lengths, offsets, types, &acc_node_type);
+  MPI_Type_commit(&acc_node_type);
+
+  // send acc_node
+  int *displ;
   vector<acc_node> acc_nodes;
   if (rank == 0) {
+    int total_queries = 0;
+    displ = (int *) malloc(procs * sizeof(int));
     for (int i = 0; i < procs; i++) {
-      for (int j = 0; j < threads; j++) {
-        string input_file = my_acc_file(shared_dir, i, j);
-        ifstream ifs;
-
-        ifs.open(input_file, ios::in);
-        if (!ifs) {
-          cout << "Fatal error: cannot open acc_info_file: " << input_file << ".\n";
-          MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-
-        float ff;
-        int ii;
-        
-        while (1) {
-          ifs >> ii;
-          ifs >> ff;
-          
-          if (ii == -1) {
-            break;
-          }
-          
-          acc_nodes.push_back(acc_node(ii, ff));
-        }
-        ifs.close();
-        if (remove(input_file.c_str()) != 0) {
-          cout << "Warning: could not delete acc_file: " << input_file << ".\n";
-        }
-      }
+      total_queries += counts[i];
+      displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
     }
-    sort(acc_nodes.begin(), acc_nodes.end());
+    acc_nodes.resize(total_queries);
   }
+  MPI_Gatherv(acc_vals.data(), num_queries, acc_node_type, acc_nodes.data(),
+              counts, displ, acc_node_type, 0, MPI_COMM_WORLD);
+  acc_vals.clear();
+  if (rank == 0) {
+    free(displ);
+    free(counts);
+  }
+  MPI_Type_free(&acc_node_type);
+
+  // balance workload
   balance_workload(parameters, sequences, names, idx, acc_nodes);
+  acc_nodes.clear();
   _dbs = db_reader.load_dbs();
 
   #pragma omp parallel for schedule(dynamic)
