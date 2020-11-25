@@ -22,6 +22,7 @@
 #include <sstream>
 #include "database_reader.h"
 #include <sys/stat.h>
+#include <unordered_map>
 
 struct acc_node {
   int idx;
@@ -49,6 +50,18 @@ class sort_indices {
     }
 };
 
+class sort_acc {
+  private:
+    vector<int> *_idx;
+  public:
+    sort_acc(vector<int> *idx) {
+      _idx = idx;
+    }
+    bool operator()(int i, int j) const {
+      return _idx->at(i) < _idx->at(j);
+    }
+};
+
 bool compare(const Hit& left, const Hit& right) {
   if(left.GetDbSp() != right.GetDbSp()){
     return(left.GetDbSp() < right.GetDbSp());
@@ -65,24 +78,30 @@ bool base_pair_compare(const BasePair& left, const BasePair& right) {
   return(left.qpos < right.qpos);
 }
 
-string my_acc_dir(string path) {
+string acc_dir(string path) {
   stringstream s;
-  int rank;
-  
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   if (path != "") {
     s << path << "/";
   }
-  s << "priblast_acc_" << rank;
+  s << "priblast_acc";
   return s.str();
 }
 
-string my_acc_file(int idx, string path) {
+string acc_file(string path, int idx) {
   stringstream s;
   if (path != "") {
     s << path << "/";
   }
   s << idx;
+  return s.str();
+}
+
+string my_acc_file(string path, int rank) {
+    stringstream s;
+  if (path != "") {
+    s << path << "/";
+  }
+  s << "_" << rank;
   return s.str();
 }
 
@@ -192,13 +211,13 @@ void load_acc(string input_file, vector<float> &acc, vector<float> &cond_acc) {
   vector<float>::iterator it;
   ifstream ifs;
   int s;
-  
+
   ifs.open(input_file.c_str(), ios::in | ios::binary);
   if (!ifs) {
     cout << "Error: can't open acc_file: " << input_file << "." << endl;
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
-  
+
   ifs.read(reinterpret_cast<char*>(&s), sizeof(int));
   acc.assign(s, 0.0);
   for (it = acc.begin(); it != acc.end(); it++) {
@@ -209,7 +228,7 @@ void load_acc(string input_file, vector<float> &acc, vector<float> &cond_acc) {
   for (it = cond_acc.begin(); it != cond_acc.end(); it++) {
       ifs.read(reinterpret_cast<char*>(&*it), sizeof(float));
   }
-  
+
   ifs.close();
 
   if (remove(input_file.c_str()) != 0) {
@@ -217,11 +236,96 @@ void load_acc(string input_file, vector<float> &acc, vector<float> &cond_acc) {
   }
 }
 
+void save_acc_info(string output_file, int idx, float f) {
+  ofstream ofs;
+
+  ofs.open(output_file.c_str(), ios::app);
+  if (!ofs) {
+    cout << "Error: can't open acc_info_file: " << output_file << "." << endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  ofs << idx << " " << f << "\n";
+  ofs.close();
+}
+
+void save_num_queries(string output_file, int num) {
+  ofstream ofs;
+
+  ofs.open(output_file.c_str(), ios::app);
+  if (!ofs) {
+    cout << "Error: can't open acc_info_file: " << output_file << "." << endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+  
+  ofs << num << "\n";
+  ofs.close();
+}
+
+void balance_workload(const RnaInteractionSearchParameters parameters,
+                      vector<string> &sequences, vector<string> &names,
+                      vector<int> &idx, vector<acc_node> &nodes) {
+  unordered_map<int, int> order;
+  vector<int> indices;
+  int rank, procs, size;
+  int *counts, *displ;
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &procs);
+
+  displ = (int *) malloc(procs * sizeof(int));
+  counts = (int *) malloc(procs * sizeof(int));
+  if (rank == 0) {
+    for (int i = 0; i < procs; i++) {
+      counts[i] = 0;
+      displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
+      for (int j = i; j < nodes.size(); j += procs) {
+        indices.push_back(nodes[j].idx);
+        counts[i] += 1;
+      }
+    }
+  }
+  MPI_Bcast(counts, procs, MPI_INT, 0, MPI_COMM_WORLD);
+  idx.resize(counts[rank]);
+  MPI_Scatterv(indices.data(), counts, displ, MPI_INT, idx.data(), idx.size(),
+               MPI_INT, 0, MPI_COMM_WORLD);
+
+  free(counts);
+  free(displ);
+
+  for (int i = 0; i < idx.size(); i++) {
+    order[idx[i]] = i;
+  }
+  sort(idx.begin(), idx.end());
+  
+  vector<string> tmp_seqs;
+  vector<string> tmp_names;
+  vector<int> tmp_idx(idx.size());
+  for (int i = 0; i < idx.size(); i++) {
+    tmp_idx[i] = idx[i];
+  }
+
+  FastafileReader fastafile_reader;
+  fastafile_reader.read_file(parameters.GetInputFilename(), tmp_seqs, tmp_names,
+                             tmp_idx);
+
+  sequences.resize(idx.size());
+  names.resize(idx.size());
+  for (int i = 0; i < idx.size(); i++) {
+    int pos = order[tmp_idx[i]];
+
+    sequences[pos] = tmp_seqs[i];
+    names[pos] = tmp_names[i];
+    idx[pos] = tmp_idx[i];
+  }
+}
+
 void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) {
   DbReader db_reader(parameters.GetDbFilename(), parameters.GetHashSize());
-  double read, total_search = 0, search, write[2];
   double my_read, my_search, my_write[2];
-  int rank, procs, threads, *last;
+  double read, search, write[2];
+  int rank, procs, threads;
+  int *last;
   vector<string> sequences;
   vector<string> names;
   vector<int> idx;
@@ -247,14 +351,17 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   MPI_Win_create(last, (rank == 0 ? sizeof(int) : 0), sizeof(int),
                  MPI_INFO_NULL, MPI_COMM_WORLD, &win);
 
-  if (mkdir(my_acc_dir(parameters.GetPath()).c_str(), 0777) == -1) {
-    cout << "Fatal error: cannot create acc directory." << endl;
-    MPI_Abort(MPI_COMM_WORLD, 1);
-  }
-
   if (parameters.GetDebug()) my_read = MPI_Wtime();
+
+  // create acc dir
+  string shared_dir = acc_dir(parameters.GetSharedPath());
+  if (rank == 0) {
+    if (mkdir(shared_dir.c_str(), 0777) == -1) {
+      cout << "Fatal error: cannot create acc directory." << endl;
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+  }
   ReadFastaFile(parameters, sequences, names, idx);
-  _dbs = db_reader.load_dbs();
 
   // sort sequences according to their size
   vector<int> indices(sequences.size());
@@ -271,6 +378,9 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   if (parameters.GetDebug()) my_search = MPI_Wtime();
   if (rank == 0) cout << "pRIblast has started." << endl;
 
+  string shared_file = my_acc_file(shared_dir, rank);
+  create_output_file(shared_file);
+
   vector<string> output_files(threads);
   for (int i = 0; i < threads; i++) {
     string out_file = my_output_file(rank, i, parameters.GetPath());
@@ -278,39 +388,78 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     create_output_file(out_file);
   }
 
-  vector<acc_node> acc_vals;
-  acc_vals.reserve(sequences.size());
+  save_num_queries(shared_file, sequences.size());
   #pragma omp parallel for schedule(dynamic)
   for (int i = 0; i < sequences.size(); i++) {
     vector<float> query_cond_accessibility;
     vector<float> query_accessibility;
 
-    string query_sequence = sequences[indices[i]];
-    string path = my_acc_file(i, my_acc_dir(parameters.GetPath()));
+    int ii = indices[i];
+
+    string query_sequence = sequences[ii];
+    string path = acc_file(shared_dir, idx[ii]);
 
     CalculateAccessibility(parameters, query_sequence, query_accessibility,
                            query_cond_accessibility);
     float f = save_acc(path, query_accessibility, query_cond_accessibility);
 
     #pragma omp critical
-    acc_vals.push_back(acc_node(i, f / query_sequence.size()));
+    save_acc_info(shared_file, idx[ii], f / query_sequence.size());
   }
 
-  sort(acc_vals.begin(), acc_vals.end());
+  sequences.clear();
+  indices.clear();
+  names.clear();
+  idx.clear();
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  vector<acc_node> acc_nodes;
+  if (rank == 0) {
+    for (int i = 0; i < procs; i++) {
+      string input_file = my_acc_file(shared_dir, i);
+
+      ifstream ifs;
+
+      ifs.open(input_file, ios::in);
+      if (!ifs) {
+        cout << "Fatal error: cannot open acc_info_file: " << input_file << ".\n";
+        MPI_Abort(MPI_COMM_WORLD, 1);
+      }
+
+      float ff;
+      int bound, ii;
+      ifs >> bound;
+
+      for (int j = 0; j < bound; j++) {
+        ifs >> ii;
+        ifs >> ff;
+
+        acc_nodes.push_back(acc_node(ii, ff));
+      }
+
+      ifs.close();
+      if (remove(input_file.c_str()) != 0) {
+        cout << "Warning: could not delete acc_file: " << input_file << ".\n";
+      }
+    }
+    sort(acc_nodes.begin(), acc_nodes.end());
+  }
+  balance_workload(parameters, sequences, names, idx, acc_nodes);
+  _dbs = db_reader.load_dbs();
 
   #pragma omp parallel for schedule(dynamic)
-  for(int i = 0; i < acc_vals.size(); i++) {
+  for(int i = 0; i < sequences.size(); i++) {
     vector<float> query_conditional_accessibility;
     vector<unsigned char> query_encoded_sequence;
     vector<float> query_accessibility;
     vector<int> query_suffix_array;
     vector<Hit> hit_result;
 
-    int idx = acc_vals[i].idx;
-    string query_sequence = sequences[indices[idx]];
-    string query_name = names[indices[idx]];
+    string query_sequence = sequences[i];
+    string query_name = names[i];
 
-    string path = my_acc_file(idx, my_acc_dir(parameters.GetPath()));
+    string path = acc_file(shared_dir, idx[i]);
     load_acc(path, query_accessibility, query_conditional_accessibility);
     ConstructSuffixArray(parameters, query_sequence, query_encoded_sequence, query_suffix_array);
     int length_count = 0;
@@ -329,7 +478,6 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
       hit_result.clear();
     }
   }
-  remove(my_acc_dir(parameters.GetPath()).c_str());
 
   if (parameters.GetDebug()) {
     my_search = MPI_Wtime() - my_search;
@@ -377,16 +525,12 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
     MPI_Reduce(&my_search, &search, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     MPI_Reduce(&my_write[0], &write[0], 2, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&my_search, &total_search, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
       cout << "Time spent reading: " << read << " seconds." << endl;
       cout << "Time spent processing: " << search << " seconds." << endl;
       cout << "Time spent writing: " << write[1] - write[0] << " seconds." << endl;
       cout << "Total time: " << read + search + write[1] - write[0] << " seconds." << endl;
-      if (threads == 1) {
-        cout << "Approximate sequential time: " << total_search << " seconds." << endl;
-      }
       cout.flush();
     }
   }
@@ -394,6 +538,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   MPI_Win_free(&win);
   if (rank == 0) {
     MPI_Free_mem(last);
+    remove(shared_dir.c_str());
     cout << "pRiblast has ended." << endl;
   }
 }

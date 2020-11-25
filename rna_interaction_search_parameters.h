@@ -36,6 +36,8 @@ class RnaInteractionSearchParameters{
   int _num_queries;
   int _debug;
   string _tmp_path;
+  string _shared_path;
+
  public:
   RnaInteractionSearchParameters(){
     _db_filename = "";
@@ -56,6 +58,7 @@ class RnaInteractionSearchParameters{
     _num_queries = 0;
     _debug = 0;
     _tmp_path = "";
+    _shared_path = "";
   }
   void SetParameters(int argc, char* argv[]);
   void SetDbParameters();
@@ -146,6 +149,10 @@ class RnaInteractionSearchParameters{
 
   string GetPath() const {
     return _tmp_path;
+  }
+
+  string GetSharedPath() const {
+    return _shared_path;
   }
 };
 

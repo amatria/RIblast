@@ -133,6 +133,12 @@ void CountSequences(string input_file_name, vector<node> &nodes) {
   fp.close();
 }
 
+void FastafileReader::read_file(string input_file_name,
+                                vector<string> &sequences,
+                                vector<string> &names, vector<int> &idx) {
+  read_seqs(input_file_name, idx, sequences, names);
+}
+
 void FastafileReader::ReadFastafile(string input_file_name,
                                     vector<string> &sequences,
                                     vector<string> &names,

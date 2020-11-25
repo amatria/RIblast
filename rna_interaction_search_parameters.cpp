@@ -72,6 +72,10 @@ void RnaInteractionSearchParameters::SetParameters(int argc, char* argv[]) {
       _tmp_path = optarg;
       break;
 
+    case 'a':
+      _shared_path = optarg;
+      break;
+
     default:
       cerr << "Error: The argument is invalid command." << endl;
       exit(1);

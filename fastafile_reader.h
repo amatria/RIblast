@@ -17,6 +17,7 @@ using namespace std;
 class FastafileReader {
  public:
   FastafileReader() {}
+  void read_file(string input_file_name, vector<string> &sequences, vector<string> &names, vector<int> &idx);
   void ReadFastafile(string input_file_name, vector<string> &sequences, vector<string> &names, vector<int> &idx);
   void ReadFastafile(string input_file_name, vector<vector<string>> &vec_sequences, vector<vector<string>> &vec_names, int max_seqs);
   void ReadFastafile(string input_file_name, string &sequences, string &name);
