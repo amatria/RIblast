@@ -374,6 +374,13 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
     #pragma omp critical
     acc_vals.push_back(acc_node(idx[ii], f / query_sequence.size()));
+
+    ofstream ofs;
+    stringstream s;
+    s << "/home/i.amatria/times/" << rank << "_" << omp_get_thread_num();
+    ofs.open(s.str().c_str(), ios::in | ios::app);
+    ofs << idx[ii] << " " << f << " " << f / query_sequence.size() << " " << query_sequence.size() << "\n";
+    ofs.close();
   }
 
   sequences.clear();
@@ -430,6 +437,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
   #pragma omp parallel for schedule(dynamic)
   for(int i = 0; i < sequences.size(); i++) {
+    double local_search = MPI_Wtime();
     vector<float> query_conditional_accessibility;
     vector<unsigned char> query_encoded_sequence;
     vector<float> query_accessibility;
@@ -457,6 +465,14 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
       hit_result.clear();
     }
+    local_search = MPI_Wtime() - local_search;
+
+    ofstream ofs;
+    stringstream s;
+    s << "/home/i.amatria/times/" << rank << "_" << omp_get_thread_num();
+    ofs.open(s.str().c_str(), ios::in | ios::app);
+    ofs << idx[i] << " " << local_search << "\n";
+    ofs.close();
   }
 
   if (parameters.GetDebug()) {
