@@ -195,10 +195,12 @@ float save_acc(string output_file, vector<float> &acc,
 
   f = 0;
   for (int i = 0; i < acc.size(); i++) {
-    f += acc[i];
+    f += pow(acc[i], 2) * (acc[i] < 0 ? -1 : 1);
+//      f += acc[i];
   }
   for (int i = 0; i < cond_acc.size(); i++) {
-    f += cond_acc[i];
+    f += pow(cond_acc[i], 2) * (cond_acc[i] < 0 ? -1 : 1);
+//      f += cond_acc[i];
   }
   return f;
 }
@@ -235,45 +237,28 @@ void load_acc(string input_file, vector<float> &acc, vector<float> &cond_acc) {
 void balance_workload(const RnaInteractionSearchParameters parameters,
                       vector<string> &sequences, vector<string> &names,
                       vector<int> &idx, vector<acc_node> &nodes) {
-  unordered_map<int, int> order;
-  vector<int> indices;
-  int rank, procs, size;
-  int *counts, *displ;
+unordered_map<int, int> order;
+  int size;
 
+  size = nodes.size();
   sort(nodes.begin(), nodes.end());
-
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &procs);
-
-  displ = (int *) malloc(procs * sizeof(int));
-  counts = (int *) malloc(procs * sizeof(int));
-  if (rank == 0) {
-    for (int i = 0; i < procs; i++) {
-      counts[i] = 0;
-      displ[i] = (i == 0 ? 0 : displ[i - 1] + counts[i - 1]);
-      for (int j = i; j < nodes.size(); j += procs) {
-        indices.push_back(nodes[j].idx);
-        counts[i] += 1;
-      }
-    }
+  for (int i = 0; i < size; i++) {
+    idx.push_back(nodes[i].idx);
   }
-  MPI_Bcast(counts, procs, MPI_INT, 0, MPI_COMM_WORLD);
-  idx.resize(counts[rank]);
-  MPI_Scatterv(indices.data(), counts, displ, MPI_INT, idx.data(), idx.size(),
-               MPI_INT, 0, MPI_COMM_WORLD);
 
-  free(counts);
-  free(displ);
+  MPI_Bcast(&size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  idx.resize(size);
+  MPI_Bcast(idx.data(), idx.size(), MPI_INT, 0, MPI_COMM_WORLD);
 
-  for (int i = 0; i < idx.size(); i++) {
+  for (int i = 0; i < size; i++) {
     order[idx[i]] = i;
   }
   sort(idx.begin(), idx.end());
-  
+
   vector<string> tmp_seqs;
   vector<string> tmp_names;
-  vector<int> tmp_idx(idx.size());
-  for (int i = 0; i < idx.size(); i++) {
+  vector<int> tmp_idx(size);
+  for (int i = 0; i < size; i++) {
     tmp_idx[i] = idx[i];
   }
 
@@ -281,9 +266,9 @@ void balance_workload(const RnaInteractionSearchParameters parameters,
   fastafile_reader.read_file(parameters.GetInputFilename(), tmp_seqs, tmp_names,
                              tmp_idx);
 
-  sequences.resize(idx.size());
-  names.resize(idx.size());
-  for (int i = 0; i < idx.size(); i++) {
+  sequences.resize(size);
+  names.resize(size);
+  for (int i = 0; i < size; i++) {
     int pos = order[tmp_idx[i]];
 
     sequences[pos] = tmp_seqs[i];
@@ -296,7 +281,7 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   DbReader db_reader(parameters.GetDbFilename(), parameters.GetHashSize());
   double my_read, my_search, my_write[2];
   double read, search, write[2];
-  int rank, procs, threads;
+  int rank, procs, threads, offset;
   int *last;
   vector<string> sequences;
   vector<string> names;
@@ -308,19 +293,19 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
   // create a shared variable
   if (rank == 0) {
-    MPI_Alloc_mem(sizeof(int), MPI_INFO_NULL, &last);
-
+    MPI_Alloc_mem(sizeof(int) * 2, MPI_INFO_NULL, &last);
     if (last == NULL) {
       cout << "Fatal error: cannot allocate memory." << endl;
       MPI_Abort(MPI_COMM_WORLD, 1);
     }
-    *last = -1;
+    last[0] = -1;
+    last[1] = 0;
   } else {
     last = NULL;
   }
 
   MPI_Win win;
-  MPI_Win_create(last, (rank == 0 ? sizeof(int) : 0), sizeof(int),
+  MPI_Win_create(last, (rank == 0 ? sizeof(int) * 2 : 0), sizeof(int),
                  MPI_INFO_NULL, MPI_COMM_WORLD, &win);
 
   if (parameters.GetDebug()) my_read = MPI_Wtime();
@@ -374,13 +359,6 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
     #pragma omp critical
     acc_vals.push_back(acc_node(idx[ii], f / query_sequence.size()));
-
-    ofstream ofs;
-    stringstream s;
-    s << "/home/i.amatria/times/" << rank << "_" << omp_get_thread_num();
-    ofs.open(s.str().c_str(), ios::in | ios::app);
-    ofs << idx[ii] << " " << f << " " << f / query_sequence.size() << " " << query_sequence.size() << "\n";
-    ofs.close();
   }
 
   sequences.clear();
@@ -435,8 +413,27 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
   acc_nodes.clear();
   _dbs = db_reader.load_dbs();
 
-  #pragma omp parallel for schedule(dynamic)
-  for(int i = 0; i < sequences.size(); i++) {
+  int one = 1;
+  #pragma omp parallel
+  while(1) {
+    int i;
+
+    #pragma omp critical
+    {
+      if (procs > 1) {
+        MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, win);
+        MPI_Fetch_and_op(&one, &offset, MPI_INT, 0, 1, MPI_SUM, win);
+        MPI_Win_unlock(0, win);
+      } else {
+        offset++;
+      }
+
+      i = offset;
+    }
+    if (i >= sequences.size()) {
+      break;
+    }
+
     double local_search = MPI_Wtime();
     vector<float> query_conditional_accessibility;
     vector<unsigned char> query_encoded_sequence;
@@ -470,8 +467,16 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
     ofstream ofs;
     stringstream s;
     s << "/home/i.amatria/times/" << rank << "_" << omp_get_thread_num();
-    ofs.open(s.str().c_str(), ios::in | ios::app);
-    ofs << idx[i] << " " << local_search << "\n";
+    ofs.open(s.str().c_str(), ios::out | ios::app);
+    ofs << idx[i] << " " << query_sequence.size() << " " << local_search << "\n";
+    for (int j = 0; j < query_accessibility.size(); j++) {
+      ofs << query_accessibility[j] << " ";
+    }
+    ofs << "\n";
+    for (int j = 0; j < query_conditional_accessibility.size(); j++) {
+      ofs << query_conditional_accessibility[j] << " ";
+    }
+    ofs << "\n";
     ofs.close();
   }
 
@@ -671,5 +676,4 @@ void RnaInteractionSearch::CheckRedundancy(vector<Hit> &hit_result, double energ
     }
   }
   hit_result.erase(remove_if(hit_result.begin(), hit_result.end(), CheckFlag()), hit_result.end());
-
 }
