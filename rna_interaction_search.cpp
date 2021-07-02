@@ -197,15 +197,15 @@ void RnaInteractionSearch::Run(const RnaInteractionSearchParameters parameters) 
 
         hit_result.clear();
       }
-    }
     local_time = MPI_Wtime() - local_time;
 
     ofstream ofs;
     stringstream s;
     s << "/home/i.amatria/times/" << rank << "_" << omp_get_thread_num();
     ofs.open(s.str().c_str(), ios::out | ios::app);
-    ofs << idx[i] << " " << query_sequence.size() << " " << local_time << "\n";
+    ofs << indices[i] << " " << query_sequence.size() << " " << local_time << "\n";
     ofs.close();
+    } 
   }
   if (parameters.GetDebug()) {
     my_search = MPI_Wtime() - my_search;
